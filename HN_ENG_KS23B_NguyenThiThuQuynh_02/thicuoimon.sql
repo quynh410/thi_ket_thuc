@@ -79,10 +79,10 @@ insert into payment (payment_id, booking_id, payment_method, payment_date, payme
 values
 (1, 1, 'Cash', '2025-03-05', 400.0),
 (2, 2, 'Credit Card', '2025-03-06', 600.0),
-(3, 3, 'Bank Transfer', '2025-03-07', 2000.0),
+(3, 3, 'Bank Transfer', '2025-03-07', 200.0),
 (4, 4, 'Cash', '2025-03-08', 4080.0),
-(5, 5, 'Credit Card', '2025-03-09', 8000.0),
-(6, 6, 'Bank Transfer', '2025-03-10', 4000.0),
+(5, 5, 'Credit Card', '2025-03-09', 800.0),
+(6, 6, 'Bank Transfer', '2025-03-10', 400.0),
 (7, 7, 'Cash', '2025-03-11', 600.0),
 (8, 8, 'Credit Card', '2025-03-12', 1000.0),
 (9, 9, 'Bank Transfer', '2025-03-13', 480.0),
@@ -145,14 +145,12 @@ join Payment p on b.booking_id = p.booking_id
 group by c.customer_id, c.customer_full_name
 having total_bookings >= 2 and total_amount > 1000;
 --  7. Lấy danh sách các phòng có tổng số tiền thanh toán dưới 1000 và có ít nhất 3 khách hàng đặt, gồm mã phòng, loại phòng, giá phòng và tổng số tiền thanh toán.
-select r.room_id, r.room_type, r.room_price,
-       sum(p.payment_amount) as total_amount,
-       count(distinct b.customer_id) as total_cus
-from room r
+select r.room_id, r.room_type, r.room_price, sum(b.total_amount)
+from room r 
 join booking b on r.room_id = b.room_id
-join payment p on b.booking_id = p.booking_id
-group by r.room_id, r.room_type, r.room_price
-having total_amount < 1000 and total_cus >= 3;
+join customer c on c.customer_id = b.customer_id
+group by b.room_id
+having sum(b.total_amount) < 1000 and count(b.room_id) >= 3;
 -- 8. Lấy danh sách các khách hàng có tổng số tiền thanh toán lớn hơn 1000, gồm mã khách hàng, họ tên khách hàng, mã phòng, tổng số tiền thanh toán.
 select c.customer_id, c.customer_full_name, b.room_id, sum(b.total_amount) as total_amount
 from booking b
@@ -169,7 +167,7 @@ from booking b
 join customer c on b.customer_id = c.customer_id
 join room r on b.room_id = r.room_id
 where b.check_in_date  < '2025-03-10';
-
+drop view book_room_before_2025_03_10;
 select * from book_room_before_2025_03_10;
 -- 2
 create view big_room_booked as select c.customer_id, c.customer_full_name, r.room_id, r.room_area
@@ -177,13 +175,37 @@ from booking b
 join customer c on b.customer_id = c.customer_id
 join room r on b.room_id = r.room_id
 where r.room_area > 30;
-
+drop view big_room_booked;
 select * from big_room_booked;
 -- Phần 6 
--- 1
--- 2 
+-- 1. Hãy tạo một trigger check_insert_booking để kiểm tra dữ liệu mối khi chèn vào bảng Booking. Kiểm tra nếu ngày đặt phòng mà sau ngày trả phòng thì thông báo lỗi với nội dung “Ngày đặt phòng không thể sau ngày trả phòng được !” và hủy thao tác chèn dữ liệu vào bảng.
+delimiter //
+create trigger trg_check_insert_booking 
+before insert on booking
+for each row 
+begin
+    if NEW.check_in_date > NEW.check_out_date then
+        signal sqlstate '45000'
+        set message_text = 'Ngày đặt phòng không thể sau ngày trả phòng được!';
+    end if;
+end //
+delimiter ;
+insert into booking (booking_id, room_id, check_in_date, check_out_date) 
+values (2, 102, '2025-04-15', '2025-04-10');
+-- 2. Hãy tạo một trigger có tên là update_room_status_on_booking để tự động cập nhật trạng thái phòng thành "Booked" khi một phòng được đặt (khi có bản ghi được INSERT vào bảng Booking).
+delimiter //
+create trigger trg_update_room_status_on_booking  after insert on booking
+for each row
+begin
+	update room
+    set room_status = 'Booked' where room_id = NEW.room_id;
+end //
+delimiter;
+insert into booking (booking_id, room_id, check_in_date, check_out_date) 
+value (1, 101, '2025-03-20', '2025-03-25');
+
 -- phần 7 
--- 1 
+-- 1. Viết store procedure có tên add_customer để thêm mới một khách hàng với đầy đủ các thông tin cần thiết.
 delimiter //
 	create procedure add_customer(
     in p_customer_id varchar(10),
@@ -192,17 +214,36 @@ delimiter //
     in p_customer_phone char(15),
     in p_customer_address varchar(255)
 )
-begin
-    insert into customer (customer_id, customer_full_name, customer_email, customer_phone, customer_address)
-    values (p_customer_id, p_customer_full_name, p_customer_email, p_customer_phone, p_customer_address);
-end 
+	begin
+		insert into customer (customer_id, customer_full_name, customer_email, customer_phone, customer_address)
+		values (p_customer_id, p_customer_full_name, p_customer_email, p_customer_phone, p_customer_address);
+	end 
 //
 delimiter ;
+drop procedure add_customer;
 call add_customer('C011', 'Do Van Tuan', 'tuan.do@example.com', '0911222333', 'Ha Noi, Vietnam');
-
-
-
-
+-- 2 Hãy tạo một Stored Procedure  có tên là add_payment để thực hiện việc thêm một thanh toán mới cho một lần đặt phòng.
+delimiter  //
+	create procedure add_payment(
+		in p_booking_id int,
+        in p_payment_method varchar(50),
+        in p_payment_amount decimal(10,2),
+        in p_payment_date date
+    )
+    begin 
+		-- thực hiện việc thêm một thanh toán mới cho một lần đặt phòng.
+		if not exists (select 1 from booking where booking_id = p_booking_id) then
+        signal sqlstate '45000'
+        set message_text = 'Lỗi  Booking ID không tồn tại.';
+    else
+        insert into payment (booking_id, payment_method, payment_amount, payment_date)
+        values (p_booking_id, p_payment_method, p_payment_amount, p_payment_date);
+    end if;
+    end 
+    //
+delimiter ;
+call add_payment (3, 'Credit Card', 1500.00, '2025-03-10');
+drop procedure add_payment;
 
 
 
